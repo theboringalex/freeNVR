@@ -11,22 +11,32 @@ services:
     volumes:
       - ./recordings:/app/recordings
       - ./config:/app/config
+      - ./models:/app/models
     environment:
       - FREENVR_API_KEY=changeme
       - RECORDINGS_PATH=/app/recordings
       - HLS_PATH=/app/recordings/hls
       - DB_PATH=/app/config/freenvr.db
       - SEGMENT_DURATION=60
+      # Motion detection
       - MOTION_ENABLED=true
       - MOTION_THRESHOLD=0.02
-    # GPU acceleration (optional — uncomment for Intel iGPU)
-    # devices:
-    #   - /dev/dri:/dev/dri
-    # group_add:
-    #   - video
+      # ONVIF
+      - ONVIF_PULL_INTERVAL=2.0
+      # Coral / AI detection
+      - CORAL_MODEL_PATH=/app/models/ssd_mobilenet_v2_coco_quant_postprocess_edgetpu.tflite
+      - CORAL_LABELS_PATH=/app/models/coco_labels.txt
+      - CORAL_SCORE_THRESHOLD=0.5
+      - CORAL_INFERENCE_FPS=1.0
+      - CORAL_DETECT_CLASSES=person,car,truck,bus,motorcycle,dog,cat
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/cameras', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
+    # Uncomment for GPU acceleration (Intel iGPU)
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # group_add:
+    #   - video

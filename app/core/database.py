@@ -15,9 +15,13 @@ async def init_db():
                 rtsp_url TEXT NOT NULL,
                 substream_url TEXT,
                 recording_mode TEXT NOT NULL DEFAULT 'continuous',
+                detection_mode TEXT NOT NULL DEFAULT 'ffmpeg',
                 enabled INTEGER NOT NULL DEFAULT 1,
                 username TEXT,
                 password TEXT,
+                onvif_host TEXT,
+                onvif_port INTEGER NOT NULL DEFAULT 8000,
+                onvif_events INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'stopped',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -41,6 +45,7 @@ async def init_db():
                 timestamp TEXT NOT NULL DEFAULT (datetime('now')),
                 thumbnail_path TEXT,
                 recording_id INTEGER,
+                metadata TEXT,
                 FOREIGN KEY (camera_id) REFERENCES cameras(id) ON DELETE CASCADE
             );
 
@@ -49,6 +54,26 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_events_camera_id ON events(camera_id);
             CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
         """)
+        await db.commit()
+
+    # Migrate existing DBs: add columns that may not exist yet
+    await _migrate(DB)
+
+
+async def _migrate(db_path: str):
+    migrations = [
+        "ALTER TABLE cameras ADD COLUMN detection_mode TEXT NOT NULL DEFAULT 'ffmpeg'",
+        "ALTER TABLE cameras ADD COLUMN onvif_host TEXT",
+        "ALTER TABLE cameras ADD COLUMN onvif_port INTEGER NOT NULL DEFAULT 8000",
+        "ALTER TABLE cameras ADD COLUMN onvif_events INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE events ADD COLUMN metadata TEXT",
+    ]
+    async with aiosqlite.connect(db_path) as db:
+        for sql in migrations:
+            try:
+                await db.execute(sql)
+            except Exception:
+                pass  # Column already exists
         await db.commit()
 
 

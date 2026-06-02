@@ -6,18 +6,26 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.config import settings
 from app.core.auth import require_api_key
-from app.core.database import get_db
 from app.models import CameraCreate, CameraOut, CameraUpdate
 
 router = APIRouter()
 Auth = Annotated[str, Depends(require_api_key)]
 
+_CAM_DEFAULTS = {
+    "status": "stopped",
+    "detection_mode": "ffmpeg",
+    "onvif_host": None,
+    "onvif_port": 8000,
+    "onvif_events": 0,
+}
 
-def _row_to_camera(row) -> dict:
-    d = dict(row)
-    d["status"] = d.get("status", "stopped")
+
+def _normalize(row: dict) -> dict:
+    d = {**_CAM_DEFAULTS, **row}
     d.setdefault("created_at", datetime.now(UTC).isoformat())
     d.setdefault("updated_at", datetime.now(UTC).isoformat())
+    d["onvif_events"] = bool(d.get("onvif_events", 0))
+    d["enabled"] = bool(d.get("enabled", 1))
     return d
 
 
@@ -28,12 +36,10 @@ async def list_cameras(request: Request, _: Auth):
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM cameras ORDER BY id") as cur:
             rows = [dict(r) for r in await cur.fetchall()]
-
     for r in rows:
         r["status"] = recorder.get_status(r["id"])
-        r.setdefault("created_at", datetime.now(UTC).isoformat())
-        r.setdefault("updated_at", datetime.now(UTC).isoformat())
-    return rows
+        _normalize(r)
+    return [_normalize(r) for r in rows]
 
 
 @router.post("", response_model=CameraOut, status_code=status.HTTP_201_CREATED)
@@ -42,24 +48,28 @@ async def create_camera(payload: CameraCreate, request: Request, _: Auth):
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """INSERT INTO cameras
-               (name, rtsp_url, substream_url, recording_mode, enabled, username, password)
-               VALUES (?,?,?,?,?,?,?)""",
+               (name, rtsp_url, substream_url, recording_mode, detection_mode,
+                enabled, username, password, onvif_host, onvif_port, onvif_events)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 payload.name,
                 payload.rtsp_url,
                 payload.substream_url,
                 payload.recording_mode.value,
+                payload.detection_mode.value,
                 int(payload.enabled),
                 payload.username,
                 payload.password,
+                payload.onvif_host,
+                payload.onvif_port,
+                int(payload.onvif_events),
             ),
         )
         await db.commit()
-        cam_id = cur.lastrowid
-        async with db.execute("SELECT * FROM cameras WHERE id=?", (cam_id,)) as c:
+        async with db.execute("SELECT * FROM cameras WHERE id=?", (cur.lastrowid,)) as c:
             row = dict(await c.fetchone())
 
-    row["status"] = "stopped"
+    row = _normalize(row)
     if payload.enabled:
         await request.app.state.recorder.start_camera(row)
         row["status"] = "recording"
@@ -74,10 +84,8 @@ async def get_camera(camera_id: int, request: Request, _: Auth):
             row = await cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Camera not found")
-    d = dict(row)
+    d = _normalize(dict(row))
     d["status"] = request.app.state.recorder.get_status(camera_id)
-    d.setdefault("created_at", datetime.now(UTC).isoformat())
-    d.setdefault("updated_at", datetime.now(UTC).isoformat())
     return d
 
 
@@ -91,10 +99,13 @@ async def update_camera(camera_id: int, payload: CameraUpdate, request: Request,
             raise HTTPException(status_code=404, detail="Camera not found")
 
         updates = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
-        if "recording_mode" in updates:
-            updates["recording_mode"] = updates["recording_mode"].value
+        for enum_field in ("recording_mode", "detection_mode"):
+            if enum_field in updates and hasattr(updates[enum_field], "value"):
+                updates[enum_field] = updates[enum_field].value
         if "enabled" in updates:
             updates["enabled"] = int(updates["enabled"])
+        if "onvif_events" in updates:
+            updates["onvif_events"] = int(updates["onvif_events"])
 
         if updates:
             set_clause = ", ".join(f"{k}=?" for k in updates)
@@ -105,7 +116,7 @@ async def update_camera(camera_id: int, payload: CameraUpdate, request: Request,
             await db.commit()
 
         async with db.execute("SELECT * FROM cameras WHERE id=?", (camera_id,)) as cur:
-            updated = dict(await cur.fetchone())
+            updated = _normalize(dict(await cur.fetchone()))
 
     recorder = request.app.state.recorder
     await recorder.stop_camera(camera_id)
@@ -114,9 +125,6 @@ async def update_camera(camera_id: int, payload: CameraUpdate, request: Request,
         updated["status"] = "recording"
     else:
         updated["status"] = "stopped"
-
-    updated.setdefault("created_at", datetime.now(UTC).isoformat())
-    updated.setdefault("updated_at", datetime.now(UTC).isoformat())
     return updated
 
 

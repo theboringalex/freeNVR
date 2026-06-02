@@ -7,8 +7,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api import cameras, recordings, streams, events
+from app.api import onvif
 from app.core.database import init_db
 from app.core.recorder import RecorderManager
+from app.core.coral_detector import backend_info
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -20,13 +22,14 @@ async def lifespan(app: FastAPI):
     recorder = RecorderManager()
     app.state.recorder = recorder
     await recorder.start_all()
-    logger.info("freeNVR started")
+    info = backend_info()
+    logger.info("freeNVR started — AI backend: %s", info["backend"])
     yield
     await recorder.stop_all()
     logger.info("freeNVR stopped")
 
 
-app = FastAPI(title="freeNVR", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="freeNVR", version="1.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,6 +42,7 @@ app.include_router(cameras.router, prefix="/api/cameras", tags=["cameras"])
 app.include_router(recordings.router, prefix="/api/recordings", tags=["recordings"])
 app.include_router(streams.router, prefix="/api/streams", tags=["streams"])
 app.include_router(events.router, prefix="/api/events", tags=["events"])
+app.include_router(onvif.router, prefix="/api/onvif", tags=["onvif"])
 
 app.mount("/recordings", StaticFiles(directory="recordings"), name="recordings")
 app.mount("/", StaticFiles(directory="app/static", html=True), name="static")

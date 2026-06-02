@@ -1,6 +1,6 @@
 import asyncio
+import json
 import logging
-import os
 import signal
 from datetime import datetime, UTC
 from pathlib import Path
@@ -29,7 +29,8 @@ class CameraRecorder:
         pwd = self.camera.get("password")
         if user and pwd and "://" in url:
             scheme, rest = url.split("://", 1)
-            return f"{scheme}://{user}:{pwd}@{rest}"
+            if "@" not in rest:
+                return f"{scheme}://{user}:{pwd}@{rest}"
         return url
 
     def _segment_path(self) -> Path:
@@ -42,7 +43,6 @@ class CameraRecorder:
         rtsp_url = self._build_rtsp_url()
         out_dir = self._segment_path()
         segment_file = str(out_dir / "%Y%m%d_%H%M%S.mp4")
-
         return [
             settings.FFMPEG_BIN,
             "-rtsp_transport", "tcp",
@@ -59,26 +59,6 @@ class CameraRecorder:
             segment_file,
         ]
 
-    def _hls_cmd(self) -> list[str]:
-        rtsp_url = self._build_rtsp_url()
-        hls_dir = settings.HLS_PATH / str(self.camera_id)
-        hls_dir.mkdir(parents=True, exist_ok=True)
-        playlist = str(hls_dir / "live.m3u8")
-
-        return [
-            settings.FFMPEG_BIN,
-            "-rtsp_transport", "tcp",
-            "-i", rtsp_url,
-            "-c:v", "copy",
-            "-c:a", "aac",
-            "-f", "hls",
-            "-hls_time", "2",
-            "-hls_list_size", str(settings.HLS_LIST_SIZE),
-            "-hls_flags", "delete_segments+append_list",
-            "-hls_segment_filename", str(hls_dir / "seg%03d.ts"),
-            playlist,
-        ]
-
     async def _run_recording(self):
         while self.running:
             cmd = self._ffmpeg_cmd()
@@ -91,35 +71,28 @@ class CameraRecorder:
                 )
                 start_time = datetime.now(UTC)
                 recording_id = await self._insert_recording(start_time)
-
                 _, stderr = await self.process.communicate()
                 end_time = datetime.now(UTC)
-
                 if stderr:
-                    last_lines = stderr.decode(errors="replace").strip().split("\n")[-3:]
-                    for line in last_lines:
+                    for line in stderr.decode(errors="replace").strip().split("\n")[-3:]:
                         if line.strip():
                             logger.debug("ffmpeg [cam %d]: %s", self.camera_id, line)
-
                 await self._finalize_recording(recording_id, end_time)
                 await self._update_status("recording")
-
             except Exception as e:
                 logger.error("Recorder error for camera %d: %s", self.camera_id, e)
                 await self._update_status("error")
-
             if self.running:
                 await asyncio.sleep(2)
 
     async def _insert_recording(self, start_time: datetime) -> int:
         async with aiosqlite.connect(settings.DB_PATH) as db:
-            now_str = start_time.isoformat()
-            cursor = await db.execute(
+            cur = await db.execute(
                 "INSERT INTO recordings (camera_id, file_path, start_time, size_bytes) VALUES (?, ?, ?, 0)",
-                (self.camera_id, "", now_str),
+                (self.camera_id, "", start_time.isoformat()),
             )
             await db.commit()
-            return cursor.lastrowid
+            return cur.lastrowid
 
     async def _finalize_recording(self, recording_id: int, end_time: datetime):
         out_dir = self._segment_path()
@@ -166,40 +139,116 @@ class CameraRecorder:
         await self._update_status("stopped")
 
 
+# ─── RecorderManager ──────────────────────────────────────────────────────────
+
 class RecorderManager:
     def __init__(self):
         self._recorders: dict[int, CameraRecorder] = {}
+        self._onvif_subs: dict[int, object] = {}
+        self._coral_detectors: dict[int, object] = {}
+        self._motion_detectors: dict[int, object] = {}
 
     async def start_all(self):
         async with aiosqlite.connect(settings.DB_PATH) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute("SELECT * FROM cameras WHERE enabled=1") as cursor:
-                cameras = [dict(row) async for row in cursor]
-
+            async with db.execute("SELECT * FROM cameras WHERE enabled=1") as cur:
+                cameras = [dict(row) async for row in cur]
         for cam in cameras:
             await self.start_camera(cam)
 
     async def start_camera(self, camera: dict):
         cam_id = camera["id"]
-        if cam_id in self._recorders:
-            await self._recorders[cam_id].stop()
-        recorder = CameraRecorder(camera)
-        self._recorders[cam_id] = recorder
-        await recorder.start()
+        await self.stop_camera(cam_id)
+
+        # FFmpeg recorder (continuous or motion mode)
+        if camera.get("recording_mode") != "disabled":
+            recorder = CameraRecorder(camera)
+            self._recorders[cam_id] = recorder
+            await recorder.start()
+
+        # FFmpeg motion detection (legacy / fallback)
+        if camera.get("detection_mode", "ffmpeg") == "ffmpeg" and camera.get("recording_mode") == "motion":
+            from app.core.motion import MotionDetector
+            url = _rtsp_with_creds(camera)
+            det = MotionDetector(cam_id, url)
+            det.start()
+            self._motion_detectors[cam_id] = det
+
+        # ONVIF event subscription
+        if camera.get("onvif_events"):
+            from app.core.onvif_client import ONVIFEventSubscriber
+            sub = ONVIFEventSubscriber(camera, self._on_event)
+            sub.start()
+            self._onvif_subs[cam_id] = sub
+
+        # Coral / TFLite object detection
+        if camera.get("detection_mode") == "coral":
+            from app.core.coral_detector import CoralDetector
+            det = CoralDetector(camera, self._on_coral_detection)
+            det.start()
+            self._coral_detectors[cam_id] = det
 
     async def stop_camera(self, camera_id: int):
         if camera_id in self._recorders:
-            await self._recorders[camera_id].stop()
-            del self._recorders[camera_id]
+            await self._recorders.pop(camera_id).stop()
+        if camera_id in self._onvif_subs:
+            await self._onvif_subs.pop(camera_id).stop()
+        if camera_id in self._coral_detectors:
+            await self._coral_detectors.pop(camera_id).stop()
+        if camera_id in self._motion_detectors:
+            await self._motion_detectors.pop(camera_id).stop()
+            del self._motion_detectors[camera_id]
 
     async def stop_all(self):
-        tasks = [r.stop() for r in self._recorders.values()]
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        self._recorders.clear()
+        cams = list(self._recorders.keys())
+        for cam_id in cams:
+            await self.stop_camera(cam_id)
 
     def get_status(self, camera_id: int) -> str:
-        if camera_id in self._recorders:
-            r = self._recorders[camera_id]
-            return "recording" if r.running else "stopped"
-        return "stopped"
+        r = self._recorders.get(camera_id)
+        return "recording" if r and r.running else "stopped"
+
+    async def _on_event(self, camera_id: int, source: str = "onvif", **kwargs):
+        """Called when ONVIF motion event is received."""
+        topic = kwargs.get("topic", "")
+        metadata = json.dumps({"source": source, "topic": topic})
+        async with aiosqlite.connect(settings.DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO events (camera_id, event_type, timestamp, metadata) VALUES (?, 'motion', datetime('now'), ?)",
+                (camera_id, metadata),
+            )
+            await db.commit()
+        logger.info("Motion event cam %d [%s] topic=%s", camera_id, source, topic)
+
+        # Trigger recording for motion-mode cameras
+        recorder = self._recorders.get(camera_id)
+        if recorder and not recorder.running:
+            await recorder.start()
+
+    async def _on_coral_detection(self, camera_id: int, detections: list[dict]):
+        """Called when Coral/TFLite detects objects in a frame."""
+        labels = [d["label"] for d in detections]
+        metadata = json.dumps({"source": "coral", "detections": detections})
+        async with aiosqlite.connect(settings.DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO events (camera_id, event_type, timestamp, metadata) VALUES (?, ?, datetime('now'), ?)",
+                (camera_id, ",".join(labels), metadata),
+            )
+            await db.commit()
+        logger.info("Coral detection cam %d: %s", camera_id, labels)
+
+        # Trigger recording
+        recorder = self._recorders.get(camera_id)
+        if recorder and not recorder.running:
+            await recorder.start()
+
+
+def _rtsp_with_creds(camera: dict) -> str:
+    url = camera.get("rtsp_url", "")
+    user = camera.get("username")
+    pwd = camera.get("password")
+    if user and pwd and "://" in url:
+        scheme, rest = url.split("://", 1)
+        if "@" not in rest:
+            return f"{scheme}://{user}:{pwd}@{rest}"
+    return url
