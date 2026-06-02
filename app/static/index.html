@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>freeNVR</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
+</head>
+<body>
+  <nav class="navbar">
+    <div class="navbar-brand">
+      <span class="icon">&#9724;</span> freeNVR
+    </div>
+    <div class="navbar-menu">
+      <button class="nav-btn active" data-view="live">Live</button>
+      <button class="nav-btn" data-view="recordings">Aufnahmen</button>
+      <button class="nav-btn" data-view="events">Ereignisse</button>
+      <button class="nav-btn" data-view="cameras">Kameras</button>
+    </div>
+    <div class="navbar-right">
+      <span id="storage-info" class="storage-badge"></span>
+    </div>
+  </nav>
+
+  <main id="app">
+    <!-- Live View -->
+    <div id="view-live" class="view active">
+      <div id="camera-grid" class="camera-grid"></div>
+    </div>
+
+    <!-- Recordings -->
+    <div id="view-recordings" class="view">
+      <div class="toolbar">
+        <select id="rec-camera-filter"><option value="">Alle Kameras</option></select>
+        <input type="date" id="rec-date-filter">
+        <button class="btn" onclick="loadRecordings()">Laden</button>
+      </div>
+      <div id="recordings-list" class="list-container"></div>
+    </div>
+
+    <!-- Events -->
+    <div id="view-events" class="view">
+      <div class="toolbar">
+        <select id="evt-camera-filter"><option value="">Alle Kameras</option></select>
+        <button class="btn" onclick="loadEvents()">Laden</button>
+      </div>
+      <div id="events-list" class="list-container"></div>
+    </div>
+
+    <!-- Camera Management -->
+    <div id="view-cameras" class="view">
+      <div class="toolbar">
+        <button class="btn btn-primary" onclick="showAddCamera()">+ Kamera hinzufügen</button>
+      </div>
+      <div id="cameras-list" class="list-container"></div>
+    </div>
+  </main>
+
+  <!-- Add/Edit Camera Modal -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-box">
+      <h2 id="modal-title">Kamera hinzufügen</h2>
+      <form id="camera-form">
+        <input type="hidden" id="cam-id">
+        <label>Name <input type="text" id="cam-name" required></label>
+        <label>RTSP URL <input type="text" id="cam-rtsp" placeholder="rtsp://192.168.1.x/stream" required></label>
+        <label>Substream URL <input type="text" id="cam-sub" placeholder="rtsp://... (optional)"></label>
+        <label>Benutzername <input type="text" id="cam-user"></label>
+        <label>Passwort <input type="password" id="cam-pass"></label>
+        <label>Aufnahme
+          <select id="cam-mode">
+            <option value="continuous">Kontinuierlich (24/7)</option>
+            <option value="motion">Bewegungserkennung</option>
+            <option value="disabled">Deaktiviert</option>
+          </select>
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" id="cam-enabled" checked> Aktiviert
+        </label>
+        <div class="form-actions">
+          <button type="button" class="btn" onclick="closeModal()">Abbrechen</button>
+          <button type="submit" class="btn btn-primary">Speichern</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

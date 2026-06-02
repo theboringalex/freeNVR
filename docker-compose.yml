@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  freenvr:
+    build: .
+    image: freenvr:latest
+    container_name: freenvr
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./recordings:/app/recordings
+      - ./config:/app/config
+    environment:
+      - FREENVR_API_KEY=changeme
+      - RECORDINGS_PATH=/app/recordings
+      - HLS_PATH=/app/recordings/hls
+      - DB_PATH=/app/config/freenvr.db
+      - SEGMENT_DURATION=60
+      - MOTION_ENABLED=true
+      - MOTION_THRESHOLD=0.02
+    # GPU acceleration (optional — uncomment for Intel iGPU)
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # group_add:
+    #   - video
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/cameras', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

@@ -1,0 +1,8 @@
+{
+  "name": "freeNVR",
+  "content_in_root": false,
+  "homeassistant": "2024.1.0",
+  "filename": "freenvr.zip",
+  "country": [],
+  "render_readme": true
+}
