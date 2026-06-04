@@ -1,0 +1,15 @@
+# Docker Compose override for Google Coral USB/PCIe
+# Usage: docker compose -f docker-compose.yml -f docker-compose.coral.yml up -d
+version: "3.9"
+
+services:
+  freenvr:
+    devices:
+      # USB Coral Accelerator
+      - /dev/bus/usb:/dev/bus/usb
+      # PCIe Coral (M.2 / mini-PCIe)
+      # - /dev/apex_0:/dev/apex_0
+    group_add:
+      - plugdev
+    environment:
+      - CORAL_MODEL_PATH=/app/models/ssd_mobilenet_v2_coco_quant_postprocess_edgetpu.tflite

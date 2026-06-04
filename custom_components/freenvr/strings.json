@@ -1,0 +1,23 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "freeNVR verbinden",
+        "description": "Gib die Verbindungsdaten deines freeNVR-Servers ein.",
+        "data": {
+          "host": "Host / IP-Adresse",
+          "port": "Port",
+          "api_key": "API-Schlüssel"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung fehlgeschlagen. Prüfe Host und Port.",
+      "invalid_auth": "Ungültiger API-Schlüssel.",
+      "unknown": "Unbekannter Fehler."
+    },
+    "abort": {
+      "already_configured": "freeNVR ist bereits konfiguriert."
+    }
+  }
+}
